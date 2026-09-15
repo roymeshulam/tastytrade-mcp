@@ -1260,7 +1260,11 @@ export class TastytradeClient {
     });
 
     // Initialize OAuth client if credentials provided
-    if (config.clientId && config.clientSecret) {
+    // tastytrade accepts refresh-token grants authenticated with a client
+    // secret alone.  Client IDs remain supported for OAuth applications that
+    // issue them, but requiring one here would silently disable a valid
+    // deployment credential and send unauthenticated API requests instead.
+    if (config.clientSecret && config.refreshToken) {
       this.oauthClient = new TastytradeOAuthClient(config, { timeoutMs });
     }
 

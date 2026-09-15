@@ -31,6 +31,7 @@ export { TastytradeMCPServer } from "./mcp-server/index.js";
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { TastytradeMCPServer } from "./mcp-server/index.js";
+import { runHttpServer } from "./http-server.js";
 
 /**
  * Was this module executed (`node dist/index.js`), or merely imported?
@@ -75,8 +76,12 @@ if (isEntryModule(import.meta.url, process.argv[1])) {
   // finished its work.
   void (async () => {
     try {
-      const server = new TastytradeMCPServer();
-      await server.run();
+      if (process.env.MCP_TRANSPORT?.trim().toLowerCase() === "streamable-http") {
+        await runHttpServer();
+      } else {
+        const server = new TastytradeMCPServer();
+        await server.run();
+      }
     } catch (err) {
       // stderr, never stdout: stdout is the MCP protocol channel.
       console.error(

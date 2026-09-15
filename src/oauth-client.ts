@@ -2,8 +2,9 @@
  * OAuth2 client for tastytrade authentication.
  *
  * Environment-variable auth only: short-lived access tokens minted from a
- * long-lived refresh token supplied via TASTYTRADE_CLIENT_ID /
- * TASTYTRADE_CLIENT_SECRET / TASTYTRADE_REFRESH_TOKEN.
+ * long-lived refresh token supplied via TASTYTRADE_CLIENT_SECRET /
+ * TASTYTRADE_REFRESH_TOKEN. TASTYTRADE_CLIENT_ID is optional: tastytrade also
+ * supports confidential refresh grants that authenticate with the secret alone.
  *
  * There is deliberately NO interactive authorization-code flow. A server an agent
  * can make bind a listening socket — and that then prints a never-expiring refresh
@@ -496,8 +497,8 @@ export class TastytradeOAuthClient {
         {
           grant_type: "refresh_token",
           refresh_token: refreshToken,
-          client_id: this.config.clientId,
           client_secret: this.config.clientSecret,
+          ...(this.config.clientId ? { client_id: this.config.clientId } : {}),
         },
         {
           headers: {
