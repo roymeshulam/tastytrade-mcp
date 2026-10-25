@@ -76,7 +76,9 @@ if (isEntryModule(import.meta.url, process.argv[1])) {
   // finished its work.
   void (async () => {
     try {
-      if (process.env.MCP_TRANSPORT?.trim().toLowerCase() === "streamable-http") {
+      if (
+        process.env.MCP_TRANSPORT?.trim().toLowerCase() === "streamable-http"
+      ) {
         await runHttpServer();
       } else {
         const server = new TastytradeMCPServer();

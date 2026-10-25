@@ -1,6 +1,11 @@
 /** Streamable-HTTP entrypoint for deployments behind a reverse proxy. */
 
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import { randomUUID } from "node:crypto";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { TastytradeMCPServer } from "./mcp-server/index.js";
@@ -12,7 +17,10 @@ const DEFAULT_PORT = 8010;
 function listEnv(name: string, fallback: string[]): string[] {
   const raw = process.env[name];
   if (raw === undefined || raw.trim() === "") return fallback;
-  return raw.split(",").map((value) => value.trim()).filter(Boolean);
+  return raw
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
 }
 
 function portEnv(): number {
@@ -27,17 +35,30 @@ function send(res: ServerResponse, status: number, body: string): void {
   res.end(JSON.stringify({ error: body }));
 }
 
-/** Start a stateful MCP Streamable HTTP server. */
-export async function runHttpServer(): Promise<void> {
+/**
+ * Start a stateful MCP Streamable HTTP server.
+ *
+ * Resolves with the listening `http.Server` so a caller (and the tests) can
+ * close it; the process entrypoint simply ignores the handle.
+ */
+export async function runHttpServer(): Promise<Server> {
   const host = process.env.MCP_HOST?.trim() || DEFAULT_HOST;
   const port = portEnv();
   const endpoint = process.env.MCP_STREAMABLE_HTTP_PATH?.trim() || DEFAULT_PATH;
-  const allowedHosts = listEnv("MCP_ALLOWED_HOSTS", [host === "127.0.0.1" ? `127.0.0.1:${port}` : `${host}:${port}`]);
+  const allowedHosts = listEnv("MCP_ALLOWED_HOSTS", [
+    host === "127.0.0.1" ? `127.0.0.1:${port}` : `${host}:${port}`,
+  ]);
   const allowedOrigins = listEnv("MCP_ALLOWED_ORIGINS", []);
   const sessions = new Map<string, StreamableHTTPServerTransport>();
 
-  const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    const requestUrl = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  const handler = async (
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> => {
+    const requestUrl = new URL(
+      req.url ?? "/",
+      `http://${req.headers.host ?? "localhost"}`,
+    );
     if (requestUrl.pathname === "/healthz") {
       send(res, 200, "ok");
       return;
@@ -61,6 +82,13 @@ export async function runHttpServer(): Promise<void> {
         allowedOrigins: allowedOrigins.length > 0 ? allowedOrigins : undefined,
         enableDnsRebindingProtection: true,
       });
+      // Drop the session from the map when its transport closes, whether the
+      // client sent DELETE or the connection was torn down, so abandoned
+      // sessions do not accumulate for the life of the process.
+      const created = transport;
+      created.onclose = () => {
+        if (created.sessionId) sessions.delete(created.sessionId);
+      };
       const server = new TastytradeMCPServer();
       await server.connect(transport);
     }
@@ -75,7 +103,9 @@ export async function runHttpServer(): Promise<void> {
       }
       if (req.method === "DELETE" && suppliedId) sessions.delete(suppliedId);
     } catch (error) {
-      console.error(`[tastytrade-mcp] HTTP transport error: ${error instanceof Error ? error.message : String(error)}`);
+      console.error(
+        `[tastytrade-mcp] HTTP transport error: ${error instanceof Error ? error.message : String(error)}`,
+      );
       if (!res.headersSent) send(res, 500, "Internal server error");
     }
   };
@@ -88,5 +118,8 @@ export async function runHttpServer(): Promise<void> {
       resolve();
     });
   });
-  console.error(`[tastytrade-mcp] listening on http://${host}:${port}${endpoint}`);
+  console.error(
+    `[tastytrade-mcp] listening on http://${host}:${port}${endpoint}`,
+  );
+  return httpServer;
 }
