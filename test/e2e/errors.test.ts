@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
-import { createHarness, callError } from "./harness.js";
+import { createHarness, callError, withFrozenClock } from "./harness.js";
 import type { Harness } from "./harness.js";
 import { _resetRateLimitsForTest } from "../../src/safety/rate-limit.js";
 import type { ToolError, ToolErrorCode } from "../../src/safety/errors.js";
@@ -179,15 +179,17 @@ describe("error taxonomy: retry metadata", () => {
       routes: [{ matcher: /\/orders\//, reply: { data: {} } }],
     });
 
-    for (let i = 0; i < 20; i++) {
-      await h.client.callTool({
-        name: "tastytrade_cancel_order",
-        arguments: { account_number: ACCT, order_id: `${i}` },
+    const err = await withFrozenClock(async () => {
+      for (let i = 0; i < 20; i++) {
+        await h!.client.callTool({
+          name: "tastytrade_cancel_order",
+          arguments: { account_number: ACCT, order_id: `${i}` },
+        });
+      }
+      return envelope(h!, "tastytrade_cancel_order", {
+        account_number: ACCT,
+        order_id: "20",
       });
-    }
-    const err = await envelope(h, "tastytrade_cancel_order", {
-      account_number: ACCT,
-      order_id: "20",
     });
 
     expect(err.code).toBe("rate_limit_exceeded");

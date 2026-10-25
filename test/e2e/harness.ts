@@ -19,6 +19,7 @@
  * you see TS6059, that config is what went missing.
  */
 
+import { jest } from "@jest/globals";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { AxiosRequestConfig, AxiosResponse } from "axios";
@@ -494,4 +495,38 @@ export async function callError(
     throw new Error(`Expected ${name} to error, but it succeeded: ${text}`);
   }
   return JSON.parse(text);
+}
+
+/**
+ * Freeze ONLY `Date` for the duration of `body`. The rate limiter refills off
+ * `Date.now()`, per second; under a loaded parallel run enough real time can
+ * pass mid-test for a token to come back, so a test about an exhausted bucket
+ * failed for a reason unrelated to its subject. Timers, microtasks and
+ * performance stay real, so the MCP round trips still run.
+ */
+export async function withFrozenClock<T>(body: () => Promise<T>): Promise<T> {
+  jest.useFakeTimers({
+    now: Date.now(),
+    doNotFake: [
+      "hrtime",
+      "nextTick",
+      "performance",
+      "queueMicrotask",
+      "requestAnimationFrame",
+      "cancelAnimationFrame",
+      "requestIdleCallback",
+      "cancelIdleCallback",
+      "setImmediate",
+      "clearImmediate",
+      "setInterval",
+      "clearInterval",
+      "setTimeout",
+      "clearTimeout",
+    ],
+  });
+  try {
+    return await body();
+  } finally {
+    jest.useRealTimers();
+  }
 }

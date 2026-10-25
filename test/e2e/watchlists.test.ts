@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "@jest/globals";
-import { createHarness, callOk, callError } from "./harness.js";
+import {
+  createHarness,
+  callOk,
+  callError,
+  withFrozenClock,
+} from "./harness.js";
 import type { Harness } from "./harness.js";
 import { _resetRateLimitsForTest } from "../../src/safety/rate-limit.js";
 import {
@@ -118,28 +123,30 @@ describe("the watchlist mutators declare what they do", () => {
       reply: { data: { id: 1 } },
     });
 
-    // Exhaust the destructive cap with an order cancel, without naming its size.
-    let refusals = 0;
-    for (let i = 0; i < 60; i++) {
-      const res = (await h.client.callTool({
-        name: "tastytrade_cancel_order",
-        arguments: { account_number: "5WX00001", order_id: "1001" },
-      })) as { isError?: boolean; content?: Array<{ text?: string }> };
-      if (res.isError) {
-        const err = JSON.parse(res.content?.[0]?.text ?? "{}");
-        if (err.code === "rate_limit_exceeded") {
-          refusals += 1;
-          break;
+    const err = await withFrozenClock(async () => {
+      // Exhaust the destructive cap with an order cancel, without naming its size.
+      let refusals = 0;
+      for (let i = 0; i < 60; i++) {
+        const res = (await h!.client.callTool({
+          name: "tastytrade_cancel_order",
+          arguments: { account_number: "5WX00001", order_id: "1001" },
+        })) as { isError?: boolean; content?: Array<{ text?: string }> };
+        if (res.isError) {
+          const err = JSON.parse(res.content?.[0]?.text ?? "{}");
+          if (err.code === "rate_limit_exceeded") {
+            refusals += 1;
+            break;
+          }
+          throw new Error(`unexpected error: ${res.content?.[0]?.text}`);
         }
-        throw new Error(`unexpected error: ${res.content?.[0]?.text}`);
       }
-    }
-    expect(refusals).toBe(1);
+      expect(refusals).toBe(1);
 
-    // A watchlist mutator now shares that exhausted budget.
-    const err = await callError(h, "tastytrade_update_watchlist", {
-      name: WL,
-      symbols: ["AAPL"],
+      // A watchlist mutator now shares that exhausted budget.
+      return callError(h!, "tastytrade_update_watchlist", {
+        name: WL,
+        symbols: ["AAPL"],
+      });
     });
     expect(err.code).toBe("rate_limit_exceeded");
   });
