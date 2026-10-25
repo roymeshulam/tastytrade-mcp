@@ -44,6 +44,84 @@ export interface ToolMeta {
   additionalProperties?: boolean;
 }
 
+/**
+ * What an order read says about the CALLER'S identifier (tastytrade/tastytrade-mcp#47).
+ * Shared so the eight order-read descriptions cannot drift apart.
+ */
+const PROVENANCE_NOTE =
+  "PROVENANCE: every Order carries `source`, the identifier the originating application sent with the submit. Orders placed through this server carry `tastytrade-mcp/<version>`, so an order an agent placed is distinguishable from one entered by hand or by another integration. The API exposes no `source` query filter, so filter on it client-side after reading. CALLER IDENTIFIER: an order submitted with `external_identifier` (tastytrade_dry_run_order / tastytrade_place_order) carries it back verbatim as `external-identifier`; that is the field to match your own order on after an uncertain submit. Do NOT substitute `ext-client-order-id` (broker-assigned routing data) or `source` (shared by every order this server places). The broker does not deduplicate on `external-identifier`.";
+
+/** The completeness contract every order-LIST read returns beside `items`. */
+const ORDER_LIST_PAGING_NOTE =
+  "RESULT SHAPE: an object {items, pagination, completeness}. `items` is the unwrapped data.items Order array; `pagination` is the broker's own pagination object, verbatim (null when the broker sent none); `completeness` is THIS SERVER's verdict on whether the read saw every matching order: completeness.verdict 'complete' (this single response holds every match — a negative search is conclusive), 'partial' (coherent pagination, more pages exist: read every page_offset from 0 to total_pages - 1, next_page_offset names the next one), or 'unknown' (pagination missing, malformed or inconsistent — nothing proves completeness, so an absent order is NOT evidence the order does not exist). Before resubmitting after an uncertain submit, narrow the read (start_at just before the submit, per_page up to 2000) until ONE response is 'complete': pages read one after another can shift as new orders arrive, so stitching 'partial' pages together is weaker evidence.";
+
+const ORDER_LIST_PAGING_PROPERTIES = {
+  pagination: {
+    type: ["object", "null"],
+    description:
+      "The broker's top-level pagination object, verbatim and untrusted (per-page, page-offset, item-offset, total-items, total-pages, current-item-count, links). null when the broker sent none.",
+    additionalProperties: true,
+  },
+  completeness: {
+    type: "object",
+    description:
+      "This server's verdict on whether this read saw every order matching the request, derived from `pagination` and the number of items returned. Missing or malformed pagination is never judged complete.",
+    additionalProperties: false,
+    properties: {
+      verdict: {
+        type: "string",
+        description:
+          "'complete' (this response holds every match), 'partial' (other pages hold more), or 'unknown' (completeness cannot be established).",
+      },
+      reason: {
+        type: "string",
+        description: "Why the status was reached, in a sentence.",
+      },
+      items_returned: {
+        type: ["integer", "null"],
+        description: "Orders in this response; null if it was not an array.",
+      },
+      page_offset: {
+        type: ["integer", "null"],
+        description: "The broker's page-offset for this response.",
+      },
+      per_page: {
+        type: ["integer", "null"],
+        description: "The broker's per-page, when it sent one.",
+      },
+      total_items: {
+        type: ["integer", "null"],
+        description: "Total matching orders across all pages, per the broker.",
+      },
+      total_pages: {
+        type: ["integer", "null"],
+        description: "Total pages, per the broker.",
+      },
+      next_page_offset: {
+        type: ["integer", "null"],
+        description:
+          "The page_offset to request next with the same filters; null when there is no further page.",
+      },
+    },
+    required: ["verdict", "reason"],
+  },
+} as const;
+
+/** The echoed caller identifier, on every Order shape this registry declares. */
+const EXTERNAL_IDENTIFIER_PROPERTY = {
+  "external-identifier": {
+    type: ["string", "null"],
+    description:
+      "The caller-supplied `external_identifier` the order was submitted with, echoed verbatim by the broker; absent or null when none was sent. Not `ext-client-order-id`, which is broker-assigned.",
+  },
+} as const;
+
+const EXTERNAL_IDENTIFIER_PARAM =
+  "Optional. Your own handle for this order (e.g. a UUID you persisted with the order intent), 1-255 printable ASCII characters with no leading/trailing whitespace. Sent unchanged as `external-identifier` and echoed back on the order by tastytrade_get_order, tastytrade_search_orders and tastytrade_get_live_orders, so an uncertain submit can be matched to its order after a restart. It is part of the order body the confirmation token is bound to: the dry-run and the submit must carry the identical value (or both omit it). It is NOT an idempotency key — the broker does not deduplicate on it.";
+
+const TOKEN_IS_NOT_IDEMPOTENCY_NOTE =
+  "RECOVERY: the confirmation token only prevents replay of THAT TOKEN — it is not a broker-enforced idempotency key, and two tokens for identical arguments place two orders. If a submit's outcome is unknown (timeout, dropped connection, write_outcome_unknown), do NOT retry: find the order first — by `external-identifier` if you sent `external_identifier` — with a read whose `completeness.verdict` is 'complete' (tastytrade_search_orders paged to the end, or tastytrade_get_live_orders), and resubmit only if that complete read proves the order absent. This server never resubmits on its own.";
+
 export const TOOL_METADATA: Record<string, ToolMeta> = {
   tastytrade_get_accounts: {
     title: "List Accounts",
@@ -2389,7 +2467,10 @@ export const TOOL_METADATA: Record<string, ToolMeta> = {
   tastytrade_search_orders: {
     title: "Search Orders (Account, Paginated)",
     description:
-      "Read-only. Returns a paginated, newest-first list of orders for one account from GET /accounts/{account_number}/orders. Use to find historical or current orders by date range (start_date/end_date, or higher-precision start_at/end_at), one or more order statuses, underlying_symbol, or futures_symbol (e.g. 'show my filled AAPL orders from last week'). Does NOT place, modify, or cancel anything. Returns the unwrapped data.items array of Order objects (id, status, order-type, time-in-force, price/price-effect as string-decimals, legs with per-leg fills, lifecycle timestamps, cancellable/editable flags). Pagination is offset-based via page_offset/per_page: the unwrapped result is only the array (no cursor or total is echoed back), so request the next page by incrementing page_offset until you receive fewer than per_page rows. On failure the tool returns an isError envelope carrying a structured ToolError { code, message, retryable }: an invalid status value or malformed date yields code 'validation' (HTTP 422), an unknown account yields code 'not_found' (404), and exceeding the 50/sec global rate limit yields 'rate_limit_exceeded'. PROVENANCE: every Order carries `source`, the identifier the originating application sent with the submit. Orders placed through this server carry `tastytrade-mcp/<version>`, so an order an agent placed is distinguishable from one entered by hand or by another integration. The API exposes no `source` query filter, so filter on it client-side after reading. `source` is the only provenance the read side carries.",
+      "Read-only. Returns a paginated, newest-first list of orders for one account from GET /accounts/{account_number}/orders. Use to find historical or current orders by date range (start_date/end_date, or higher-precision start_at/end_at), one or more order statuses, underlying_symbol, or futures_symbol (e.g. 'show my filled AAPL orders from last week'). Does NOT place, modify, or cancel anything. Each Order carries id, status, order-type, time-in-force, price/price-effect as string-decimals, legs with per-leg fills, lifecycle timestamps, cancellable/editable flags and, when one was sent, external-identifier. Pagination is offset-based via page_offset/per_page. " +
+      ORDER_LIST_PAGING_NOTE +
+      " On failure the tool returns an isError envelope carrying a structured ToolError { code, message, retryable }: an invalid status value or malformed date yields code 'validation' (HTTP 422), an unknown account yields code 'not_found' (404), and exceeding the 50/sec global rate limit yields 'rate_limit_exceeded'. " +
+      PROVENANCE_NOTE,
     paramDescriptions: {
       account_number:
         "The tastytrade account number to search orders for (e.g. '5WX34382'). Required.",
@@ -2411,7 +2492,7 @@ export const TOOL_METADATA: Record<string, ToolMeta> = {
         "Filter by futures symbol (e.g. '/ESM6'); matches both futures and futures-option orders on that product.",
       sort: "Sort direction by received time. 'Desc' = newest first (default), 'Asc' = oldest first.",
       page_offset:
-        "Zero-indexed page offset for pagination. Increment to page forward; the page cursor is not echoed in the unwrapped result.",
+        "Zero-indexed page offset for pagination. Increment to page forward; the result's `completeness.next_page_offset` names the next page and is null on the last one.",
       per_page:
         "Number of orders per page (1-2000). Defaults to the API default when omitted.",
     },
@@ -2435,6 +2516,7 @@ export const TOOL_METADATA: Record<string, ToolMeta> = {
                 description:
                   "Unique order identifier. Arrives as a JSON number (cert) or numeric string — treat as opaque and stringify when passing to *_order_id args.",
               },
+              ...EXTERNAL_IDENTIFIER_PROPERTY,
               "account-number": {
                 type: "string",
                 description: "The account that owns the order.",
@@ -2628,6 +2710,7 @@ export const TOOL_METADATA: Record<string, ToolMeta> = {
             required: ["id", "status"],
           },
         },
+        ...ORDER_LIST_PAGING_PROPERTIES,
       },
       required: ["items"],
     },
@@ -2635,7 +2718,8 @@ export const TOOL_METADATA: Record<string, ToolMeta> = {
   tastytrade_get_orders: {
     title: "Search Orders (Deprecated Alias)",
     description:
-      "DEPRECATED read-only alias of tastytrade_search_orders with identical inputs, behavior, and output; retained only for backward compatibility and scheduled for removal. Do NOT select this tool for new calls; prefer tastytrade_search_orders. Both dispatch to the same handler and call GET /accounts/{account_number}/orders, returning the same unwrapped data.items array of Order objects with the same offset-based page_offset/per_page pagination (no cursor echoed back) and the same isError envelope on failure (code 'validation' on a bad status/date, 'not_found' on an unknown account, 'rate_limit_exceeded' once the 50/sec global rate limit is exceeded). PROVENANCE: every Order carries `source`, the identifier the originating application sent with the submit. Orders placed through this server carry `tastytrade-mcp/<version>`, so an order an agent placed is distinguishable from one entered by hand or by another integration. The API exposes no `source` query filter, so filter on it client-side after reading. `source` is the only provenance the read side carries.",
+      "DEPRECATED read-only alias of tastytrade_search_orders with identical inputs, behavior, and output; retained only for backward compatibility and scheduled for removal. Do NOT select this tool for new calls; prefer tastytrade_search_orders. Both dispatch to the same handler and call GET /accounts/{account_number}/orders, returning the same {items, pagination, completeness} object with the same offset-based page_offset/per_page pagination and the same isError envelope on failure (code 'validation' on a bad status/date, 'not_found' on an unknown account, 'rate_limit_exceeded' once the 50/sec global rate limit is exceeded). " +
+      PROVENANCE_NOTE,
     paramDescriptions: {
       account_number:
         "The tastytrade account number to search orders for. Required.",
@@ -2683,6 +2767,7 @@ export const TOOL_METADATA: Record<string, ToolMeta> = {
             required: ["id", "status"],
           },
         },
+        ...ORDER_LIST_PAGING_PROPERTIES,
       },
       required: ["items"],
     },
@@ -2690,7 +2775,10 @@ export const TOOL_METADATA: Record<string, ToolMeta> = {
   tastytrade_get_live_orders: {
     title: "Get Today's Orders (All Statuses)",
     description:
-      "Read-only. Returns EVERY order placed on the account during the current trading day from GET /accounts/{account_number}/orders/live, NOT only currently-working orders: the result includes all statuses (Received, Routed, In Flight, Live, Contingent, Filled, Cancelled, Expired, Rejected, etc.). 'Live' here means 'placed today (any status)'. Use it for 'what did I trade today' / intraday order monitoring; to filter by status or look back across multiple days, use tastytrade_search_orders. Does NOT modify state. Returns the unwrapped data.items array of Order objects (id, status, order-type, price as string-decimal, legs with per-leg fills, cancellable/editable, lifecycle timestamps). On failure the tool returns an isError envelope: code 'not_found' (HTTP 404) for an unknown account, 'rate_limit_exceeded' once the 50/sec global rate limit is exceeded. PROVENANCE: every Order carries `source`, the identifier the originating application sent with the submit. Orders placed through this server carry `tastytrade-mcp/<version>`, so an order an agent placed is distinguishable from one entered by hand or by another integration. The API exposes no `source` query filter, so filter on it client-side after reading. `source` is the only provenance the read side carries.",
+      "Read-only. Returns EVERY order placed on the account during the current trading day from GET /accounts/{account_number}/orders/live, NOT only currently-working orders: the result includes all statuses (Received, Routed, In Flight, Live, Contingent, Filled, Cancelled, Expired, Rejected, etc.). 'Live' here means 'placed today (any status)'. Use it for 'what did I trade today' / intraday order monitoring; to filter by status or look back across multiple days, use tastytrade_search_orders. Does NOT modify state. Each Order carries id, status, order-type, price as string-decimal, legs with per-leg fills, cancellable/editable, lifecycle timestamps and, when one was sent, external-identifier. The endpoint takes no paging parameters; if the broker sends no pagination metadata the verdict is 'unknown' rather than 'complete'. " +
+      ORDER_LIST_PAGING_NOTE +
+      " On failure the tool returns an isError envelope: code 'not_found' (HTTP 404) for an unknown account, 'rate_limit_exceeded' once the 50/sec global rate limit is exceeded. " +
+      PROVENANCE_NOTE,
     paramDescriptions: {
       account_number:
         "The tastytrade account number whose current-trading-day orders to fetch. Required.",
@@ -2720,6 +2808,7 @@ export const TOOL_METADATA: Record<string, ToolMeta> = {
                 description:
                   "Current order status; any status may appear, this endpoint is not limited to Live. Open string (not an enum) — non-terminal: Received, Routed, In Flight, Live, Cancel Requested, Replace Requested, Contingent, Remove Pending; terminal: Filled, Cancelled, Expired, Rejected, Removed, Partially Removed, Dead. The API can return a status outside that list.",
               },
+              ...EXTERNAL_IDENTIFIER_PROPERTY,
               "order-type": {
                 type: "string",
                 description: "The order type.",
@@ -2764,6 +2853,7 @@ export const TOOL_METADATA: Record<string, ToolMeta> = {
             required: ["id", "status"],
           },
         },
+        ...ORDER_LIST_PAGING_PROPERTIES,
       },
       required: ["items"],
     },
@@ -2771,7 +2861,8 @@ export const TOOL_METADATA: Record<string, ToolMeta> = {
   tastytrade_place_order: {
     title: "Place Order (Live, Money-Moving)",
     description:
-      "FINANCIALLY IMPACTFUL, money-moving. Submits a REAL single- or multi-leg order (equities, options, combos, futures, crypto) to the market via POST /accounts/{account_number}/orders. PRECONDITION / confirmation handshake: you MUST first call tastytrade_dry_run_order with the EXACT same args to obtain a `confirmation_token` (server-side safety token, single-use, ~60s TTL, sha256-bound to the canonicalized {account_number, order body}); a missing, expired, reused, or mismatched token is rejected (code 'confirmation_expired' / 'dry_run_required' / 'validation'). On submit the server re-runs sanity checks and HARD-BLOCKS with code 'sanity_check_failed' when: any per-leg quantity exceeds the account position limit published for THAT leg's instrument class (equity, equity option, future, future option — no cap is published for crypto, event contracts, fixed income or liquidity pools, so such legs are size-checked by nothing local and say so in sanity_warnings), the buying-power impact exceeds the configured max notional (MAX_ORDER_NOTIONAL_USD, default ~$50k), or the account is frozen / opening-into-closing-only; non-blocking conditions the SERVER found (e.g. margin-call state, unreachable limit endpoint) are returned as a `sanity_warnings` string array appended to the result, while any notes the BROKER sent are returned separately in `upstream_notes`, which is relayed upstream text and not a server verdict. The notional check needs a figure to compare against and cannot invent one: when the dry-run reports no usable change-in-buying-power the cap is NOT applied at all and the submit proceeds, carrying a sanity_warnings entry that says exactly that — read that warning as 'this order was not measured', never as 'this order passed'. The per-leg position limit and the frozen / closing-only gate are unaffected: those are read live and tastytrade enforces them too. SUCCESS returns the unwrapped PlacedOrderResponse: order (id, status e.g. Routed, legs, fills), buying-power-effect, fee-calculation, closing-fee-calculation, warnings[], errors[], notes[], PLUS the appended `sanity_warnings`. Common isError conditions (structured ToolError { code, message, retryable }): insufficient buying power / market closed / invalid leg action for instrument type (code 'validation', 422), price-effect-vs-action mismatch ('cant buy for credit'), 'rate_limit_exceeded' — branch on `retryable`, not on the code: if THIS SERVER's limiter refused the call it was charged before the token was consumed, so nothing was dispatched, the confirmation token is untouched and still inside its TTL, and the envelope says retryable:true — wait retry_after_ms and repeat the identical call. If the BROKER answered 429 the token was already spent, the envelope says retryable:false, and the identical call can never succeed: wait retry_after_ms and re-run the matching dry_run_* tool for a fresh token, 'upstream_error' (5xx). NOTE: notional-dollar orders (the API's `Notional Market` order type) are not supported by this tool — it exposes no value/value_effect inputs and the order body never emits them, which is why that order type is absent from the `order_type` enum. Read `checks_not_run` as the authoritative list of what was NOT verified; an empty `sanity_warnings` means 'nothing found among the checks that ran', never 'everything was checked'.",
+      "FINANCIALLY IMPACTFUL, money-moving. Submits a REAL single- or multi-leg order (equities, options, combos, futures, crypto) to the market via POST /accounts/{account_number}/orders. PRECONDITION / confirmation handshake: you MUST first call tastytrade_dry_run_order with the EXACT same args to obtain a `confirmation_token` (server-side safety token, single-use, ~60s TTL, sha256-bound to the canonicalized {account_number, order body}); a missing, expired, reused, or mismatched token is rejected (code 'confirmation_expired' / 'dry_run_required' / 'validation'). On submit the server re-runs sanity checks and HARD-BLOCKS with code 'sanity_check_failed' when: any per-leg quantity exceeds the account position limit published for THAT leg's instrument class (equity, equity option, future, future option — no cap is published for crypto, event contracts, fixed income or liquidity pools, so such legs are size-checked by nothing local and say so in sanity_warnings), the buying-power impact exceeds the configured max notional (MAX_ORDER_NOTIONAL_USD, default ~$50k), or the account is frozen / opening-into-closing-only; non-blocking conditions the SERVER found (e.g. margin-call state, unreachable limit endpoint) are returned as a `sanity_warnings` string array appended to the result, while any notes the BROKER sent are returned separately in `upstream_notes`, which is relayed upstream text and not a server verdict. The notional check needs a figure to compare against and cannot invent one: when the dry-run reports no usable change-in-buying-power the cap is NOT applied at all and the submit proceeds, carrying a sanity_warnings entry that says exactly that — read that warning as 'this order was not measured', never as 'this order passed'. The per-leg position limit and the frozen / closing-only gate are unaffected: those are read live and tastytrade enforces them too. SUCCESS returns the unwrapped PlacedOrderResponse: order (id, status e.g. Routed, legs, fills), buying-power-effect, fee-calculation, closing-fee-calculation, warnings[], errors[], notes[], PLUS the appended `sanity_warnings`. Common isError conditions (structured ToolError { code, message, retryable }): insufficient buying power / market closed / invalid leg action for instrument type (code 'validation', 422), price-effect-vs-action mismatch ('cant buy for credit'), 'rate_limit_exceeded' — branch on `retryable`, not on the code: if THIS SERVER's limiter refused the call it was charged before the token was consumed, so nothing was dispatched, the confirmation token is untouched and still inside its TTL, and the envelope says retryable:true — wait retry_after_ms and repeat the identical call. If the BROKER answered 429 the token was already spent, the envelope says retryable:false, and the identical call can never succeed: wait retry_after_ms and re-run the matching dry_run_* tool for a fresh token, 'upstream_error' (5xx). NOTE: notional-dollar orders (the API's `Notional Market` order type) are not supported by this tool — it exposes no value/value_effect inputs and the order body never emits them, which is why that order type is absent from the `order_type` enum. Read `checks_not_run` as the authoritative list of what was NOT verified; an empty `sanity_warnings` means 'nothing found among the checks that ran', never 'everything was checked'. " +
+      TOKEN_IS_NOT_IDEMPOTENCY_NOTE,
     paramDescriptions: {
       account_number:
         "The tastytrade account number to place the order in. Required.",
@@ -2787,6 +2878,7 @@ export const TOOL_METADATA: Record<string, ToolMeta> = {
         "Direction of price: 'Credit' (you receive) or 'Debit' (you pay). Required by the API whenever price is set.",
       stop_trigger:
         "Stop trigger price as a string-decimal. Required for Stop and Stop Limit orders.",
+      external_identifier: EXTERNAL_IDENTIFIER_PARAM,
       legs: "Array of 1-4 order legs. Each leg is one instrument action; combine legs for spreads/combos. Per leg — `symbol`: the instrument symbol (Equity 'AAPL'; equity option in OCC format e.g. 'AAPL  260417C00200000'; future '/ESM6'; future option './ESZ9 EW4U9 190927P2975'). `instrument_type`: Equity, Equity Option, Future, Future Option, or Cryptocurrency. `action`: use 'Buy'/'Sell' ONLY for outright Future, and 'Buy to Open' / 'Buy to Close' / 'Sell to Open' / 'Sell to Close' for Equity, Equity Option, Future Option and Cryptocurrency — mismatched combinations are rejected with code 'validation'. `quantity`: number of shares/contracts, must be positive; fractional shares are supported for equities and crypto.",
     },
     outputSchema: {
@@ -2813,6 +2905,7 @@ export const TOOL_METADATA: Record<string, ToolMeta> = {
                   description:
                     "Unique order identifier. Arrives as a JSON number (cert) or numeric string — treat as opaque and stringify when passing to *_order_id args.",
                 },
+                ...EXTERNAL_IDENTIFIER_PROPERTY,
                 "account-number": {
                   type: "string",
                   description: "The account that owns the order.",
@@ -3029,7 +3122,8 @@ export const TOOL_METADATA: Record<string, ToolMeta> = {
   tastytrade_dry_run_order: {
     title: "Dry-Run Order (Preview, No Execution)",
     description:
-      "Read-only pre-flight. Validates a prospective single- or multi-leg order via POST /accounts/{account_number}/orders/dry-run WITHOUT routing it; moves no money. Use it before tastytrade_place_order to preview buying-power-effect, estimated fees, and any blocking errors / non-blocking warnings, and to mint the `confirmation_token` required to actually submit. Returns the broker's dry-run payload under `upstream` (order, buying-power-effect, fee-calculation, warnings, notes) PLUS a `confirmation_token` field: a non-null single-use ~60s token is issued ONLY when the dry-run reports no errors AND describes an order (it carries an `order`, a `complex-order`, or a `buying-power-effect`), and it is bound to the exact {account_number, order body}. A null token has a SECOND cause with a different fix: a dry-run that reported no errors but described no order — no `order`, no `complex-order`, no `buying-power-effect` — also mints nothing, and there is no error text to act on. Retrying the identical dry-run will not help; check that the configured endpoint names the real API and that nothing between this server and the broker is rewriting the response body. If `upstream.errors[]` is non-empty the token is null and you must fix the order and re-run; treat any non-empty `upstream.errors[]` as 'do not proceed', and treat warnings[] as informational signals that the live order could still be rejected. Re-run this whenever any arg changes before submitting. Common isError (structured ToolError): invalid leg action for instrument type (code 'validation'), market-data/validation failures, 'rate_limit_exceeded' (the 50/sec global rate limit). Read `checks_not_run` as the authoritative list of what was NOT verified; an empty `sanity_warnings` means 'nothing found among the checks that ran', never 'everything was checked'. NOTE ON `upstream.errors[]`: the broker OMITS the key entirely when there is nothing wrong — a clean dry-run returns `upstream` with order, buying-power-effect, fee-calculation, notes and warnings, and no `errors` at all. Verified against a live response. So test it as absent-or-empty (`(upstream.errors ?? []).length`); `upstream.errors.length` throws on every successful dry-run.",
+      "Read-only pre-flight. Validates a prospective single- or multi-leg order via POST /accounts/{account_number}/orders/dry-run WITHOUT routing it; moves no money. Use it before tastytrade_place_order to preview buying-power-effect, estimated fees, and any blocking errors / non-blocking warnings, and to mint the `confirmation_token` required to actually submit. Returns the broker's dry-run payload under `upstream` (order, buying-power-effect, fee-calculation, warnings, notes) PLUS a `confirmation_token` field: a non-null single-use ~60s token is issued ONLY when the dry-run reports no errors AND describes an order (it carries an `order`, a `complex-order`, or a `buying-power-effect`), and it is bound to the exact {account_number, order body}. A null token has a SECOND cause with a different fix: a dry-run that reported no errors but described no order — no `order`, no `complex-order`, no `buying-power-effect` — also mints nothing, and there is no error text to act on. Retrying the identical dry-run will not help; check that the configured endpoint names the real API and that nothing between this server and the broker is rewriting the response body. If `upstream.errors[]` is non-empty the token is null and you must fix the order and re-run; treat any non-empty `upstream.errors[]` as 'do not proceed', and treat warnings[] as informational signals that the live order could still be rejected. Re-run this whenever any arg changes before submitting. Common isError (structured ToolError): invalid leg action for instrument type (code 'validation'), market-data/validation failures, 'rate_limit_exceeded' (the 50/sec global rate limit). Read `checks_not_run` as the authoritative list of what was NOT verified; an empty `sanity_warnings` means 'nothing found among the checks that ran', never 'everything was checked'. NOTE ON `upstream.errors[]`: the broker OMITS the key entirely when there is nothing wrong — a clean dry-run returns `upstream` with order, buying-power-effect, fee-calculation, notes and warnings, and no `errors` at all. Verified against a live response. So test it as absent-or-empty (`(upstream.errors ?? []).length`); `upstream.errors.length` throws on every successful dry-run. " +
+      TOKEN_IS_NOT_IDEMPOTENCY_NOTE,
     paramDescriptions: {
       account_number:
         "The tastytrade account number to validate the order against. Required.",
@@ -3043,6 +3137,7 @@ export const TOOL_METADATA: Record<string, ToolMeta> = {
         "Direction of price: Credit or Debit. Required by the API whenever price is set.",
       stop_trigger:
         "Stop trigger price as a string-decimal. Required for Stop and Stop Limit orders.",
+      external_identifier: EXTERNAL_IDENTIFIER_PARAM,
       legs: "Array of 1-4 order legs (must be identical to what you will later place to keep the confirmation_token valid). Per leg — `symbol`: the instrument symbol (Equity 'AAPL'; equity option in OCC format e.g. 'AAPL  260417C00200000'; future '/ESM6'; future option './ESZ9 EW4U9 190927P2975'). `instrument_type`: Equity, Equity Option, Future, Future Option, or Cryptocurrency. `action`: 'Buy'/'Sell' ONLY for outright Future, otherwise 'Buy to Open' / 'Buy to Close' / 'Sell to Open' / 'Sell to Close'. `quantity`: number of shares/contracts, must be positive.",
     },
     outputSchema: {
@@ -3151,7 +3246,8 @@ export const TOOL_METADATA: Record<string, ToolMeta> = {
   tastytrade_get_order: {
     title: "Get Order by ID",
     description:
-      "Read-only. Fetches a single order by its ID via GET /accounts/{account_number}/orders/{id}. Use to inspect or poll the current status of one known order (e.g. after placing one, watch it move Received -> Routed -> Live -> Filled) including its legs, per-leg fills, cancellable/editable flags, and reject-reason if rejected. Does NOT modify anything. Returns one Order object (the unwrapped .data.data). On failure the tool returns an isError envelope: code 'not_found' (HTTP 404) if the order id or account is unknown, 'rate_limit_exceeded' once the 50/sec global rate limit is exceeded. PROVENANCE: every Order carries `source`, the identifier the originating application sent with the submit. Orders placed through this server carry `tastytrade-mcp/<version>`, so an order an agent placed is distinguishable from one entered by hand or by another integration. The API exposes no `source` query filter, so filter on it client-side after reading. `source` is the only provenance the read side carries.",
+      "Read-only. Fetches a single order by its ID via GET /accounts/{account_number}/orders/{id}. Use to inspect or poll the current status of one known order (e.g. after placing one, watch it move Received -> Routed -> Live -> Filled) including its legs, per-leg fills, cancellable/editable flags, and reject-reason if rejected. Does NOT modify anything. Returns one Order object (the unwrapped .data.data). On failure the tool returns an isError envelope: code 'not_found' (HTTP 404) if the order id or account is unknown, 'rate_limit_exceeded' once the 50/sec global rate limit is exceeded. " +
+      PROVENANCE_NOTE,
     paramDescriptions: {
       account_number:
         "The tastytrade account number that owns the order. Required.",
@@ -3170,6 +3266,7 @@ export const TOOL_METADATA: Record<string, ToolMeta> = {
           description:
             "Unique order identifier. Arrives as a JSON number (cert) or numeric string — treat as opaque and stringify when passing to *_order_id args.",
         },
+        ...EXTERNAL_IDENTIFIER_PROPERTY,
         "account-number": {
           type: "string",
           description: "The account that owns the order.",
@@ -3894,7 +3991,10 @@ export const TOOL_METADATA: Record<string, ToolMeta> = {
   tastytrade_search_customer_orders: {
     title: "Search Customer Orders (All Accounts)",
     description:
-      "Read-only: searches historical and current orders across the accounts you name, via GET /customers/me/orders. account_numbers is REQUIRED: the endpoint returns 400 (validation_error, domain account-numbers) without it, so there is no search-every-account form — read the list from tastytrade_get_accounts first. The customer is always the one the configured credential belongs to; there is no customer_id argument. Use this when the user wants order history or status that may span multiple accounts; prefer tastytrade_search_orders when the search is scoped to a single known account_number. Filter by date range (start_date/end_date as calendar days, or higher-precision start_at/end_at instants), one or more order statuses, underlying_symbol, underlying_instrument_type, futures_symbol, and account_numbers, which is required rather than optional; sort defaults to Desc (newest first). Does NOT place, modify, or cancel any order and moves no money. Returns a JSON array of Order objects (each with id, account-number, status, order-type, time-in-force, price/price-effect as string-decimals, underlying-symbol, lifecycle timestamps received-at/live-at/terminal-at, cancellable/editable flags, and legs[] carrying remaining-quantity and fills). Pagination: page_offset/per_page page the underlying request, but the result is the bare order array with no pagination cursor, total, or context echoed back, so a result set larger than per_page is silently truncated and the caller cannot detect the truncation. Errors are returned as an isError:true ToolError envelope whose errors[] entries carry a stable code (e.g. validation for malformed dates, auth_failed/not_permitted for inaccessible accounts or an invalid session, rate_limit_exceeded); branch on code, never on message text. PROVENANCE: every Order carries `source`, the identifier the originating application sent with the submit. Orders placed through this server carry `tastytrade-mcp/<version>`, so an order an agent placed is distinguishable from one entered by hand or by another integration. The API exposes no `source` query filter, so filter on it client-side after reading. `source` is the only provenance the read side carries.",
+      "Read-only: searches historical and current orders across the accounts you name, via GET /customers/me/orders. account_numbers is REQUIRED: the endpoint returns 400 (validation_error, domain account-numbers) without it, so there is no search-every-account form — read the list from tastytrade_get_accounts first. The customer is always the one the configured credential belongs to; there is no customer_id argument. Use this when the user wants order history or status that may span multiple accounts; prefer tastytrade_search_orders when the search is scoped to a single known account_number. Filter by date range (start_date/end_date as calendar days, or higher-precision start_at/end_at instants), one or more order statuses, underlying_symbol, underlying_instrument_type, futures_symbol, and account_numbers, which is required rather than optional; sort defaults to Desc (newest first). Does NOT place, modify, or cancel any order and moves no money. Returns a JSON array of Order objects (each with id, account-number, status, order-type, time-in-force, price/price-effect as string-decimals, underlying-symbol, lifecycle timestamps received-at/live-at/terminal-at, cancellable/editable flags, and legs[] carrying remaining-quantity and fills). Pagination: page_offset/per_page page the underlying request, and the broker's paging context is returned so truncation is detectable. " +
+      ORDER_LIST_PAGING_NOTE +
+      " Errors are returned as an isError:true ToolError envelope whose errors[] entries carry a stable code (e.g. validation for malformed dates, auth_failed/not_permitted for inaccessible accounts or an invalid session, rate_limit_exceeded); branch on code, never on message text. " +
+      PROVENANCE_NOTE,
     paramDescriptions: {
       account_numbers:
         "Optional array of tastytrade account numbers (e.g. ['5WX34382']) to restrict the search to specific accounts owned by the customer. Sent as repeated account-numbers[]= query params. Omit to search all of the customer's accounts.",
@@ -4191,6 +4291,7 @@ export const TOOL_METADATA: Record<string, ToolMeta> = {
             ],
           },
         },
+        ...ORDER_LIST_PAGING_PROPERTIES,
       },
       required: ["items"],
     },
@@ -4198,7 +4299,10 @@ export const TOOL_METADATA: Record<string, ToolMeta> = {
   tastytrade_get_customer_live_orders: {
     title: "Get Customer Live Orders (Today, All Accounts)",
     description:
-      "Read-only: returns every order from the current trading day across the accounts you name, via GET /customers/me/orders/live. account_numbers is REQUIRED: the endpoint returns 400 (validation_error, domain account-numbers) without it — read the list from tastytrade_get_accounts first. The customer is always the one the configured credential belongs to; there is no customer_id argument. IMPORTANT: despite the name, 'live' means 'created or updated today, ANY status' — the result includes orders filled, cancelled, rejected, or expired today, plus older GTC orders that are still Live today; it is NOT a feed of only currently-working orders. To get only working orders, filter the returned array by status (Received, Routed, In Flight, Live, Contingent) or instead use tastytrade_search_customer_orders with the status filter. account_numbers is required, not optional: without it the endpoint refuses the request. Does NOT place, modify, or cancel any order and moves no money. DO NOT poll this endpoint for real-time updates: per tastytrade, repeated polling degrades platform performance and may result in throttling or suspension of API access; subscribe to the account streamer for live order updates instead. Returns a JSON array of Order objects with the same shape as tastytrade_search_customer_orders (id, account-number, status, order-type, time-in-force, price/price-effect as string-decimals, underlying-symbol, lifecycle timestamps received-at/live-at/terminal-at, cancellable/editable flags, legs[].fills). This endpoint accepts no date or pagination parameters, so the full same-day set is returned as one unpaginated array. Errors are returned as an isError:true ToolError envelope whose errors[] entries carry a stable code (e.g. auth_failed/not_permitted for an invalid session or inaccessible accounts, rate_limit_exceeded); branch on code, never on message text. PROVENANCE: every Order carries `source`, the identifier the originating application sent with the submit. Orders placed through this server carry `tastytrade-mcp/<version>`, so an order an agent placed is distinguishable from one entered by hand or by another integration. The API exposes no `source` query filter, so filter on it client-side after reading. `source` is the only provenance the read side carries.",
+      "Read-only: returns every order from the current trading day across the accounts you name, via GET /customers/me/orders/live. account_numbers is REQUIRED: the endpoint returns 400 (validation_error, domain account-numbers) without it — read the list from tastytrade_get_accounts first. The customer is always the one the configured credential belongs to; there is no customer_id argument. IMPORTANT: despite the name, 'live' means 'created or updated today, ANY status' — the result includes orders filled, cancelled, rejected, or expired today, plus older GTC orders that are still Live today; it is NOT a feed of only currently-working orders. To get only working orders, filter the returned array by status (Received, Routed, In Flight, Live, Contingent) or instead use tastytrade_search_customer_orders with the status filter. account_numbers is required, not optional: without it the endpoint refuses the request. Does NOT place, modify, or cancel any order and moves no money. DO NOT poll this endpoint for real-time updates: per tastytrade, repeated polling degrades platform performance and may result in throttling or suspension of API access; subscribe to the account streamer for live order updates instead. Returns a JSON array of Order objects with the same shape as tastytrade_search_customer_orders (id, account-number, status, order-type, time-in-force, price/price-effect as string-decimals, underlying-symbol, lifecycle timestamps received-at/live-at/terminal-at, cancellable/editable flags, legs[].fills). This endpoint accepts no date or pagination parameters; if the broker sends no pagination metadata the verdict is 'unknown' rather than 'complete'. " +
+      ORDER_LIST_PAGING_NOTE +
+      " Errors are returned as an isError:true ToolError envelope whose errors[] entries carry a stable code (e.g. auth_failed/not_permitted for an invalid session or inaccessible accounts, rate_limit_exceeded); branch on code, never on message text. " +
+      PROVENANCE_NOTE,
     paramDescriptions: {
       account_numbers:
         "Optional array of tastytrade account numbers (e.g. ['5WX34382']) to restrict the result to specific accounts owned by the customer. Sent as repeated account-numbers[]= query params. Omit to include all of the customer's accounts.",
@@ -4442,6 +4546,7 @@ export const TOOL_METADATA: Record<string, ToolMeta> = {
             required: ["id", "account-number", "status"],
           },
         },
+        ...ORDER_LIST_PAGING_PROPERTIES,
       },
       required: ["items"],
     },
@@ -4449,7 +4554,8 @@ export const TOOL_METADATA: Record<string, ToolMeta> = {
   tastytrade_get_complex_orders: {
     title: "List Complex Orders (Paginated)",
     description:
-      "Read-only. Returns a paginated list of every complex multi-leg order strategy (OTO, OCO, OTOCO, PAIRS) for one account via GET /accounts/{account_number}/complex-orders. Use this for the full/historical set; use tastytrade_get_live_complex_orders instead when you only want strategies that had a component placed today. Each item is a ComplexOrder: id, account-number, type, trigger-order (an Order, null for OCO/PAIRS), orders[] (child Orders carrying status/legs/fills/contingent-status/complex-order-tag), related-orders[], terminal-at, and for PAIRS the ratio-price-comparator/ratio-price-threshold/ratio-price-is-threshold-based-on-notional fields. The underlying API wraps the payload as {data:{items:[...]}}; this tool returns just the bare items array (no pagination cursor or total is surfaced). Page through with page_offset (0-indexed) and per_page. No side effects. Failures come back as isError:true with a structured ToolError code: not_found (unknown account_number / 404), auth_failed (401/403), validation (422), or rate_limit_exceeded (429). PROVENANCE: every Order carries `source`, the identifier the originating application sent with the submit. Orders placed through this server carry `tastytrade-mcp/<version>`, so an order an agent placed is distinguishable from one entered by hand or by another integration. The API exposes no `source` query filter, so filter on it client-side after reading. `source` is the only provenance the read side carries.",
+      "Read-only. Returns a paginated list of every complex multi-leg order strategy (OTO, OCO, OTOCO, PAIRS) for one account via GET /accounts/{account_number}/complex-orders. Use this for the full/historical set; use tastytrade_get_live_complex_orders instead when you only want strategies that had a component placed today. Each item is a ComplexOrder: id, account-number, type, trigger-order (an Order, null for OCO/PAIRS), orders[] (child Orders carrying status/legs/fills/contingent-status/complex-order-tag), related-orders[], terminal-at, and for PAIRS the ratio-price-comparator/ratio-price-threshold/ratio-price-is-threshold-based-on-notional fields. The underlying API wraps the payload as {data:{items:[...]}}; this tool returns just the bare items array (no pagination cursor or total is surfaced). Page through with page_offset (0-indexed) and per_page. No side effects. Failures come back as isError:true with a structured ToolError code: not_found (unknown account_number / 404), auth_failed (401/403), validation (422), or rate_limit_exceeded (429). " +
+      PROVENANCE_NOTE,
     paramDescriptions: {
       account_number:
         "The tastytrade account number (e.g. '5WX34382') whose complex orders to list. Scopes the query to this account.",
@@ -4724,7 +4830,8 @@ export const TOOL_METADATA: Record<string, ToolMeta> = {
   tastytrade_get_live_complex_orders: {
     title: "List Today's Complex Orders",
     description:
-      "Read-only. Returns every complex order for an account that had at least one component order placed today, in any status, via GET /accounts/{account_number}/complex-orders/live. 'Live' here means submitted-today, NOT 'currently working' - a Filled, Cancelled, or Expired strategy from today still appears. Use for an intraday snapshot of today's complex-order activity; use tastytrade_get_complex_orders for the full/historical paginated set. Returns an un-paginated array of ComplexOrder objects (the API's {data:{items:[...]}} unwrapped to the bare items array), each with id, type, trigger-order, child orders[] (status/legs/fills/contingent-status), related-orders[], terminal-at, and PAIRS ratio fields. No side effects. Failures return isError:true with a ToolError code: not_found (unknown account_number / 404), auth_failed (401/403), or rate_limit_exceeded (429). PROVENANCE: every Order carries `source`, the identifier the originating application sent with the submit. Orders placed through this server carry `tastytrade-mcp/<version>`, so an order an agent placed is distinguishable from one entered by hand or by another integration. The API exposes no `source` query filter, so filter on it client-side after reading. `source` is the only provenance the read side carries.",
+      "Read-only. Returns every complex order for an account that had at least one component order placed today, in any status, via GET /accounts/{account_number}/complex-orders/live. 'Live' here means submitted-today, NOT 'currently working' - a Filled, Cancelled, or Expired strategy from today still appears. Use for an intraday snapshot of today's complex-order activity; use tastytrade_get_complex_orders for the full/historical paginated set. Returns an un-paginated array of ComplexOrder objects (the API's {data:{items:[...]}} unwrapped to the bare items array), each with id, type, trigger-order, child orders[] (status/legs/fills/contingent-status), related-orders[], terminal-at, and PAIRS ratio fields. No side effects. Failures return isError:true with a ToolError code: not_found (unknown account_number / 404), auth_failed (401/403), or rate_limit_exceeded (429). " +
+      PROVENANCE_NOTE,
     paramDescriptions: {
       account_number:
         "The tastytrade account number (e.g. '5WX34382') whose today's complex orders to list. Scopes the query to this account.",

@@ -641,6 +641,29 @@ function envelopeItemsOrBody(response: AxiosResponse): any {
 }
 
 /**
+ * One page of an order list, with the broker's paging context kept.
+ *
+ * The plain `envelopeItems*` unwraps return only `data.items` and throw away the
+ * top-level `pagination` object tastytrade sends beside `data` on a paginated
+ * read. Without it an empty or short result cannot be told apart from "the
+ * matching order is on a page you did not read", so a negative search could
+ * never prove anything (tastytrade/tastytrade-mcp#47). `pagination` is passed
+ * through verbatim — `undefined` when the broker sent none — and judged by
+ * `assessOrderPage` in src/mcp-server/order-pages.ts, not here.
+ */
+export interface OrderListPage {
+  items: any;
+  pagination: unknown;
+}
+
+function envelopeOrderPage(
+  response: AxiosResponse,
+  items: (response: AxiosResponse) => any,
+): OrderListPage {
+  return { items: items(response), pagination: response.data?.pagination };
+}
+
+/**
  * A single-entity payload, tolerantly: the entity at `.data`, else the body as
  * it arrived. Same trade-off as `envelopeItemsOrBody`, one layer shallower.
  */
@@ -1727,13 +1750,21 @@ export class TastytradeClient {
    * `status[]=…` per docs.
    */
   async searchOrders(accountNumber: string, params?: Record<string, unknown>) {
+    return (await this.searchOrdersPage(accountNumber, params)).items;
+  }
+
+  /** {@link searchOrders} with the broker's `pagination` context kept. */
+  async searchOrdersPage(
+    accountNumber: string,
+    params?: Record<string, unknown>,
+  ): Promise<OrderListPage> {
     const response = await this.client.get(
       apiPath(["/accounts/", seg("account_number", accountNumber), "/orders"]),
       {
         params: params ?? {},
       },
     );
-    return envelopeItemsOrBody(response);
+    return envelopeOrderPage(response, envelopeItemsOrBody);
   }
 
   /** Backward-compat thin wrapper. Same endpoint as searchOrders. */
@@ -1750,13 +1781,21 @@ export class TastytradeClient {
     customerId: string,
     params?: Record<string, unknown>,
   ) {
+    return (await this.searchCustomerOrdersPage(customerId, params)).items;
+  }
+
+  /** {@link searchCustomerOrders} with the broker's `pagination` context kept. */
+  async searchCustomerOrdersPage(
+    customerId: string,
+    params?: Record<string, unknown>,
+  ): Promise<OrderListPage> {
     const response = await this.client.get(
       apiPath(["/customers/", seg("customer_id", customerId), "/orders"]),
       {
         params: params ?? {},
       },
     );
-    return envelopeItemsOrBody(response);
+    return envelopeOrderPage(response, envelopeItemsOrBody);
   }
 
   /**
@@ -1768,13 +1807,21 @@ export class TastytradeClient {
     customerId: string,
     params?: Record<string, unknown>,
   ) {
+    return (await this.getCustomerLiveOrdersPage(customerId, params)).items;
+  }
+
+  /** {@link getCustomerLiveOrders} with any broker `pagination` context kept. */
+  async getCustomerLiveOrdersPage(
+    customerId: string,
+    params?: Record<string, unknown>,
+  ): Promise<OrderListPage> {
     const response = await this.client.get(
       apiPath(["/customers/", seg("customer_id", customerId), "/orders/live"]),
       {
         params: params ?? {},
       },
     );
-    return envelopeItemsOrBody(response);
+    return envelopeOrderPage(response, envelopeItemsOrBody);
   }
 
   async getOrder(accountNumber: string, orderId: string) {
@@ -1790,6 +1837,11 @@ export class TastytradeClient {
   }
 
   async getLiveOrders(accountNumber: string) {
+    return (await this.getLiveOrdersPage(accountNumber)).items;
+  }
+
+  /** {@link getLiveOrders} with any broker `pagination` context kept. */
+  async getLiveOrdersPage(accountNumber: string): Promise<OrderListPage> {
     const response = await this.client.get(
       apiPath([
         "/accounts/",
@@ -1797,7 +1849,7 @@ export class TastytradeClient {
         "/orders/live",
       ]),
     );
-    return envelopeItems(response);
+    return envelopeOrderPage(response, envelopeItems);
   }
 
   async placeOrder(accountNumber: string, orderData: any) {

@@ -2380,6 +2380,22 @@ describe("`additionalProperties: false` is set only on a wrapper we build", () =
         "A gated order route: the server-owned wrapper is closed, the broker's payload under `upstream` is not.",
       ]),
     ),
+    // The order-list reads return {items, pagination, completeness}: `items`
+    // is the dispatcher's usual wrapper, `pagination` is the broker's object
+    // boxed under its own (open) member, and `completeness` is this server's
+    // verdict. Every key at this level is one the server authors (#47).
+    ...Object.fromEntries(
+      [
+        "tastytrade_search_orders",
+        "tastytrade_get_orders",
+        "tastytrade_get_live_orders",
+        "tastytrade_search_customer_orders",
+        "tastytrade_get_customer_live_orders",
+      ].map((tool) => [
+        tool,
+        "An order-list read: items plus the broker's pagination (open) and this server's completeness verdict.",
+      ]),
+    ),
   };
 
   it("closes only `{items: …}` wrappers, or a justified exception", () => {

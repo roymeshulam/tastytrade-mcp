@@ -29,6 +29,13 @@ import { _resetTokensForTest } from "../../src/safety/confirmation.js";
 import { MCP_ORDER_SOURCE } from "../../src/mcp-server/index.js";
 
 const ACCT = "5WX00001";
+
+/** What every order-list read returns since #47. */
+interface OrderListResult {
+  items: Array<Record<string, unknown>>;
+  pagination: unknown;
+  completeness: { verdict: string; next_page_offset: number | null };
+}
 const ORDER_ID = "1075264";
 const COMPLEX_ID = "56544";
 
@@ -207,7 +214,7 @@ describe("order search: tastytrade_search_orders / tastytrade_get_orders", () =>
       sort: "Asc",
       page_offset: 1,
       per_page: 25,
-    })) as Array<Record<string, unknown>>;
+    })) as OrderListResult;
 
     const req = requestFor(h, "GET", `/accounts/${ACCT}/orders`);
     // account_number is a path segment, so it must NOT also appear as a query
@@ -229,10 +236,13 @@ describe("order search: tastytrade_search_orders / tastytrade_get_orders", () =>
     expectKebabOnly(req);
     expect(req.body).toBeUndefined();
 
-    // Unwrapped to .data.data.items — the bare array, not the {items:…}
-    // envelope, which `toEqual` against the array already rejects.
-    expect(result).toEqual(fixture.items);
-    expect(result[0]).toHaveProperty("account-number");
+    // Unwrapped to .data.data.items under `items`, beside the broker's paging
+    // context and this server's completeness verdict (#47). The fixture
+    // carries no pagination object, so the verdict cannot be "complete".
+    expect(result.items).toEqual(fixture.items);
+    expect(result.items[0]).toHaveProperty("account-number");
+    expect(result.pagination).toBeNull();
+    expect(result.completeness.verdict).toBe("unknown");
   });
 
   it("treats tastytrade_get_orders as a byte-identical deprecated alias", async () => {
@@ -275,7 +285,12 @@ describe("order search: tastytrade_search_orders / tastytrade_get_orders", () =>
 
     expect(
       await callOk(h, "tastytrade_get_orders", { account_number: ACCT }),
-    ).toEqual([]);
+    ).toEqual({
+      items: [],
+      pagination: null,
+      // An empty answer with no pagination is NOT a complete negative.
+      completeness: expect.objectContaining({ verdict: "unknown" }),
+    });
     expect(requestFor(h, "GET", `/accounts/${ACCT}/orders`).params).toEqual({});
   });
 });
@@ -327,11 +342,12 @@ describe("order read: tastytrade_get_order / tastytrade_get_live_orders", () => 
 
     const result = (await callOk(h, "tastytrade_get_live_orders", {
       account_number: ACCT,
-    })) as Array<Record<string, unknown>>;
+    })) as OrderListResult;
 
     expect(trace(h)).toEqual([`GET /accounts/${ACCT}/orders/live`]);
-    expect(result).toEqual(fixture.items);
-    expect(result.length).toBeGreaterThan(0);
+    expect(result.items).toEqual(fixture.items);
+    expect(result.items.length).toBeGreaterThan(0);
+    expect(result.completeness.verdict).toBe("unknown");
   });
 });
 
@@ -351,7 +367,7 @@ describe("customer-level order tools", () => {
       ],
     });
 
-    const result = await callOk(h, "tastytrade_search_customer_orders", {
+    const result = (await callOk(h, "tastytrade_search_customer_orders", {
       // `customer_id` is not an argument. The
       // customer is pinned to the authenticated one, so the value that would
       // be passed here has nothing to select.
@@ -359,7 +375,7 @@ describe("customer-level order tools", () => {
       status: ["Live"],
       underlying_symbol: "AAPL",
       per_page: 10,
-    });
+    })) as OrderListResult;
 
     const req = requestFor(h, "GET", "/customers/me/orders");
     expect(req.params).toEqual({
@@ -369,7 +385,7 @@ describe("customer-level order tools", () => {
       "per-page": 10,
     });
     expectKebabOnly(req);
-    expect(result).toEqual(fixture.items);
+    expect(result.items).toEqual(fixture.items);
   });
 
   // Was "defaults customer_id to 'me'". It is pinned
@@ -414,16 +430,16 @@ describe("customer-level order tools", () => {
       ],
     });
 
-    const result = await callOk(h, "tastytrade_get_customer_live_orders", {
+    const result = (await callOk(h, "tastytrade_get_customer_live_orders", {
       account_numbers: [ACCT],
-    });
+    })) as OrderListResult;
 
     const req = requestFor(h, "GET", "/customers/me/orders/live");
     // The tool's schema exposes only account_numbers, and the dispatcher
     // forwards exactly one param — no date/status filters leak in.
     expect(req.params).toEqual({ "account-numbers[]": [ACCT] });
     expectKebabOnly(req);
-    expect(result).toEqual(fixture.items);
+    expect(result.items).toEqual(fixture.items);
   });
 });
 

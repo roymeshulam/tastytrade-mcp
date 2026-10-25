@@ -295,8 +295,8 @@ describe("provenance is discoverable from the read side", () => {
   /**
    * Setting `source` on submit is only half of "we can tell where an order came
    * from". The other half is that somebody reading orders back knows the field
-   * exists and what value to look for. `source` is the only provenance the read
-   * side carries, so the note is pinned per tool rather than trusted.
+   * exists and what value to look for, and — for a caller that sent one — that
+   * `external-identifier` comes back too. Pinned per tool rather than trusted.
    */
   const ORDER_READS = [
     "tastytrade_search_orders",
@@ -313,8 +313,10 @@ describe("provenance is discoverable from the read side", () => {
     const description = TOOL_METADATA[name]?.description ?? "";
     expect(description).toContain("PROVENANCE:");
     expect(description).toContain("tastytrade-mcp/<version>");
-    // And the read side is described as carrying `source` only.
-    expect(description).toMatch(/only provenance the read side carries/);
+    // And the caller's own identifier is named, with the two fields that must
+    // not be mistaken for it (#47).
+    expect(description).toContain("`external-identifier`");
+    expect(description).toMatch(/Do NOT substitute `ext-client-order-id`/);
   });
 
   it("names a value that matches what the builders actually send", () => {

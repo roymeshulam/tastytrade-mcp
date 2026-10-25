@@ -34,6 +34,11 @@ import {
 } from "./prompts.js";
 import { TOOL_METADATA } from "./tool-metadata.js";
 import {
+  MAX_EXTERNAL_IDENTIFIER_LENGTH,
+  externalIdentifierProblem,
+  orderPageResult,
+} from "./order-recovery.js";
+import {
   TastytradeClient,
   type TastytradeClientOptions,
 } from "../api-client.js";
@@ -348,6 +353,22 @@ export function validateLegQuantities(legs: unknown): LegQuantityError | null {
     };
   }
   return null;
+}
+
+/**
+ * Refuse an unusable `external_identifier`, or return `undefined` to proceed.
+ * Asked on the dry-run AND the submit, before the body is built, so an invalid
+ * value can neither mint a token nor reach the broker.
+ */
+function externalIdentifierRefusal(value: unknown): any | undefined {
+  const problem = externalIdentifierProblem(value);
+  if (problem === undefined) return undefined;
+  return errorResult({
+    code: "validation",
+    message: `Invalid external_identifier. ${problem}`,
+    retryable: false,
+    hint: `Pass a caller-generated handle (e.g. a UUID) of 1-${MAX_EXTERNAL_IDENTIFIER_LENGTH} printable ASCII characters, or omit it. Use the identical value on the dry-run and on the submit.`,
+  });
 }
 
 /** The shared refusal for a bad leg quantity, in the shape handlers return. */
@@ -2682,6 +2703,12 @@ export function buildOrderBody(args: any): OutboundOrderBody {
     "automated-source": false,
     ...(args.price && { price: args.price, "price-effect": args.price_effect }),
     ...(args.stop_trigger && { "stop-trigger": args.stop_trigger }),
+    // The caller's own order handle, sent unchanged. It is part of the body,
+    // so the dry-run token's argsHash covers it: a token minted for one
+    // identifier cannot submit a different one (or none).
+    ...(args.external_identifier !== undefined && {
+      "external-identifier": args.external_identifier,
+    }),
     legs: (args.legs ?? []).map((leg: any) => ({
       "instrument-type": leg.instrument_type,
       symbol: leg.symbol,
@@ -4188,6 +4215,14 @@ export class TastytradeMCPServer {
               type: "string",
               description: "Stop price (required for Stop orders)",
             },
+            external_identifier: {
+              type: "string",
+              minLength: 1,
+              maxLength: MAX_EXTERNAL_IDENTIFIER_LENGTH,
+              pattern: "^[\\x21-\\x7e](?:[\\x20-\\x7e]*[\\x21-\\x7e])?$",
+              description:
+                "Optional caller-generated order handle, sent unchanged as `external-identifier` and echoed back on the order.",
+            },
             legs: {
               type: "array",
               items: {
@@ -4287,6 +4322,14 @@ export class TastytradeMCPServer {
             stop_trigger: {
               type: "string",
               description: "Stop price (required for Stop orders)",
+            },
+            external_identifier: {
+              type: "string",
+              minLength: 1,
+              maxLength: MAX_EXTERNAL_IDENTIFIER_LENGTH,
+              pattern: "^[\\x21-\\x7e](?:[\\x20-\\x7e]*[\\x21-\\x7e])?$",
+              description:
+                "Optional caller-generated order handle, sent unchanged as `external-identifier` and echoed back on the order.",
             },
             legs: {
               type: "array",
@@ -5066,11 +5109,11 @@ export class TastytradeMCPServer {
       // Orders
       case "tastytrade_search_orders":
       case "tastytrade_get_orders": {
-        const orders = await this.client.searchOrders(
+        const orders = await this.client.searchOrdersPage(
           args.account_number,
           snakeToKebabParams(args),
         );
-        return jsonResult(orders);
+        return jsonResult(orderPageResult(orders));
       }
 
       // `AUTHENTICATED_CUSTOMER`, not `args.customer_id ?? "me"`. A default is
@@ -5083,11 +5126,11 @@ export class TastytradeMCPServer {
       // customer is what `account_numbers` is for, and every element of it is
       // checked against the credential's own account set by the pre-flight.
       case "tastytrade_search_customer_orders": {
-        const customerOrders = await this.client.searchCustomerOrders(
+        const customerOrders = await this.client.searchCustomerOrdersPage(
           AUTHENTICATED_CUSTOMER,
           customerOrderParams(args),
         );
-        return jsonResult(customerOrders);
+        return jsonResult(orderPageResult(customerOrders));
       }
 
       case "tastytrade_get_customer_live_orders": {
@@ -5095,23 +5138,18 @@ export class TastytradeMCPServer {
         if (args.account_numbers !== undefined) {
           params["account-numbers[]"] = args.account_numbers;
         }
-        const liveCustomerOrders = await this.client.getCustomerLiveOrders(
+        const liveCustomerOrders = await this.client.getCustomerLiveOrdersPage(
           AUTHENTICATED_CUSTOMER,
           params,
         );
-        return jsonResult(liveCustomerOrders);
+        return jsonResult(orderPageResult(liveCustomerOrders));
       }
 
       case "tastytrade_get_live_orders":
-        const liveOrders = await this.client.getLiveOrders(args.account_number);
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(liveOrders, null, 2),
-            },
-          ],
-        };
+        const liveOrders = await this.client.getLiveOrdersPage(
+          args.account_number,
+        );
+        return jsonResult(orderPageResult(liveOrders));
 
       case "tastytrade_place_order": {
         // Confirmation-token-bound dry-run-first flow.
@@ -5134,6 +5172,10 @@ export class TastytradeMCPServer {
         }
         const quantityError = validateLegQuantities(args.legs);
         if (quantityError) return legQuantityRefusal(quantityError);
+        const externalIdError = externalIdentifierRefusal(
+          args.external_identifier,
+        );
+        if (externalIdError) return externalIdError;
         const orderBody = buildOrderBody(args);
         const tokenEntry = consumeToken(
           args.confirmation_token,
@@ -5186,6 +5228,10 @@ export class TastytradeMCPServer {
         }
         const quantityError = validateLegQuantities(args.legs);
         if (quantityError) return legQuantityRefusal(quantityError);
+        const externalIdError = externalIdentifierRefusal(
+          args.external_identifier,
+        );
+        if (externalIdError) return externalIdError;
         const orderBody = buildOrderBody(args);
         const dryRunResult: any = await this.client.dryRunOrder(
           args.account_number,
