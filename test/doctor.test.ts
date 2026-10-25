@@ -454,15 +454,14 @@ describe("configuration copied from the dispatcher", () => {
     expect(check.data?.limit).toBe(DEFAULT_MAX_ORDER_NOTIONAL_USD);
   });
 
-  it("is not published to npm, so it exposes no installable command", () => {
+  it("is published as the tastytrade-mcp-doctor command (#46)", () => {
     const pkg = JSON.parse(
       readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"),
-    ) as { private?: boolean; bin?: unknown; publishConfig?: unknown };
-    // The supported install path is clone-and-build.
-    // `private` is what makes that stick: without it a publish still succeeds.
-    expect(pkg.private).toBe(true);
-    expect(pkg.bin).toBeUndefined();
-    expect(pkg.publishConfig).toBeUndefined();
+    ) as { private?: boolean; bin?: Record<string, string> };
+    // The npm package installs the preflight beside the server, so a user who
+    // never cloned the repository can still run it before the first trade.
+    expect(pkg.private).toBeUndefined();
+    expect(pkg.bin?.["tastytrade-mcp-doctor"]).toBe("dist/doctor.js");
   });
 
   it("keeps the shebang first in the source, so dist/doctor.js runs directly", () => {

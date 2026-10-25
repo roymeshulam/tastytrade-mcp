@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * The operator preflight command, run as `npm run doctor` or
- * `node dist/doctor.js`.
+ * The operator preflight command, run as `tastytrade-mcp-doctor` (npm install),
+ * `npm run doctor` or `node dist/doctor.js`.
  *
  * When the credentials are wrong, this server fails the same way on every tool
  * call: `auth_failed`, with nothing saying which of the four things is broken.

@@ -15,7 +15,7 @@ import { TOOL_METADATA } from "../../src/mcp-server/tool-metadata.js";
  * to tastytrade and read back off their order flow, and a version bump that
  * silently changed it on both sides at once is exactly what this literal is for.
  */
-const MCP_ORDER_SOURCE = "tastytrade-mcp/1.0.0";
+const MCP_ORDER_SOURCE = "tastytrade-mcp/2.0.0";
 
 describe("validateLegActions — instrument/action pairing", () => {
   it("returns null for non-array input", () => {

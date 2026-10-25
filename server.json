@@ -3,12 +3,49 @@
   "name": "io.github.tastytrade/tastytrade-mcp",
   "title": "tastytrade",
   "description": "Agent access to tastytrade brokerage accounts: quotes, positions, and dry-run-gated order flow.",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "websiteUrl": "https://github.com/tastytrade/tastytrade-mcp#readme",
   "repository": {
     "url": "https://github.com/tastytrade/tastytrade-mcp",
     "source": "github"
   },
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "@tastytrade/mcp-server",
+      "version": "2.0.0",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "TASTYTRADE_ENV",
+          "description": "production (real funds, the default) or sandbox.",
+          "isRequired": false,
+          "default": "production"
+        },
+        {
+          "name": "TASTYTRADE_CLIENT_ID",
+          "description": "OAuth client id.",
+          "isRequired": true
+        },
+        {
+          "name": "TASTYTRADE_CLIENT_SECRET",
+          "description": "OAuth client secret.",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "TASTYTRADE_REFRESH_TOKEN",
+          "description": "OAuth refresh token.",
+          "isRequired": true,
+          "isSecret": true
+        }
+      ]
+    }
+  ],
   "_meta": {
     "io.modelcontextprotocol.registry/publisher-provided": {
       "transport": "stdio",
@@ -18,10 +55,10 @@
         "readOnly": 70,
         "write": 2,
         "destructive": 12,
-        "note": "Twelve destructive tools. Five \u2014 place_order, edit_order, replace_order, place_complex_order, edit_complex_order \u2014 require a single-use confirmation token from their matching dry_run_* tool, valid 60 seconds and bound to a hash of the arguments. The other seven carry none: the two order cancels and five watchlist/quote-alert mutations."
+        "note": "Twelve destructive tools. Five — place_order, edit_order, replace_order, place_complex_order, edit_complex_order — require a single-use confirmation token from their matching dry_run_* tool, valid 60 seconds and bound to a hash of the arguments. The other seven carry none: the two order cancels and five watchlist/quote-alert mutations."
       },
       "install": {
-        "note": "Install by cloning and building: no image is published and no npm package, so no docker pull and no npx. A Dockerfile is included for building your own.",
+        "note": "npm: `npx -y @tastytrade/mcp-server` (see packages). Or clone and build, below. No image is published; a Dockerfile is included for building your own.",
         "cloneAndBuild": {
           "description": "Clone, build, and point your MCP client at dist/index.js.",
           "setup": [
@@ -47,7 +84,7 @@
           "notes": [
             "args must be an absolute path; MCP clients do not resolve ~ or relative paths.",
             "A .env file is NOT auto-loaded. Credentials come from the client's env block, or the launching shell.",
-            "The block above names production explicitly \u2014 real funds. Change TASTYTRADE_ENV to sandbox for no real money. An absent variable also means production, so naming it is what keeps the config honest."
+            "The block above names production explicitly — real funds. Change TASTYTRADE_ENV to sandbox for no real money. An absent variable also means production, so naming it is what keeps the config honest."
           ]
         }
       },
@@ -76,7 +113,7 @@
           "The endpoint defaults to PRODUCTION (https://api.tastyworks.com): real accounts, real funds. TASTYTRADE_ENV=sandbox selects https://api.cert.tastyworks.com; prod, live, cert, staging and sbx are also understood. A value the server cannot read resolves to the sandbox and warns on stderr.",
           "The sandbox serves no market data (HTTP 502 on every market-data and market-metrics route), which is why production is the default.",
           "Production is announced three ways: a LIVE TRADING stderr banner, the environment named in the initialize instructions, and an environment member (production, sandbox or other) on every order result.",
-          "TASTYTRADE_READ_ONLY: 1 or true withholds and refuses every write and destructive tool; 0, false, empty and unset allow them (case-insensitive, trimmed). Any other value ENABLES read-only mode and warns \u2014 a setting that cannot be read is never permission to move money.",
+          "TASTYTRADE_READ_ONLY: 1 or true withholds and refuses every write and destructive tool; 0, false, empty and unset allow them (case-insensitive, trimmed). Any other value ENABLES read-only mode and warns — a setting that cannot be read is never permission to move money.",
           "MAX_ORDER_NOTIONAL_USD caps single-order buying-power impact; the default is 50000.",
           "TASTYTRADE_API_URL is an explicit base URL for a gateway or a test double and wins over TASTYTRADE_ENV. An unrecognised host in it stops the server unless TASTYTRADE_ALLOW_UNKNOWN_API_HOST names it.",
           "A resources/read is charged the per-endpoint ceilings of the tool reaching the same endpoint, plus the global cap at its declared fan-out."

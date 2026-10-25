@@ -1,8 +1,8 @@
 {
   "name": "@tastytrade/mcp-server",
-  "version": "1.0.0",
-  "private": true,
+  "version": "2.0.0",
   "description": "Model Context Protocol server for the tastytrade brokerage API: tools, resources and prompts for quotes, positions and order flow, with every money-moving action behind a dry-run confirmation gate.",
+  "mcpName": "io.github.tastytrade/tastytrade-mcp",
   "license": "MIT",
   "author": "tastytrade",
   "homepage": "https://github.com/tastytrade/tastytrade-mcp#readme",
@@ -27,6 +27,10 @@
   ],
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "tastytrade-mcp": "dist/index.js",
+    "tastytrade-mcp-doctor": "dist/doctor.js"
+  },
   "engines": {
     "node": ">=22"
   },
@@ -34,11 +38,13 @@
     "dist",
     "tastytrade-llms-txt-docs",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "build": "tsc",
-    "prepack": "npm run build",
+    "prepack": "npm run clean && npm run build",
     "doctor": "node dist/doctor.js",
     "watch": "tsc --watch",
     "typecheck": "tsc --noEmit",
@@ -66,5 +72,8 @@
   },
   "overrides": {
     "zod": "^4.6.6"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

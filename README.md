@@ -43,6 +43,23 @@ receives when it connects, and an `environment` member on every order result.
 
 ## Install
 
+From npm, with no clone:
+
+```bash
+npx -y @tastytrade/mcp-server          # run the server once (stdio)
+npm install -g @tastytrade/mcp-server  # or install the two commands globally
+tastytrade-mcp-doctor                  # preflight your credentials (read-only)
+```
+
+A global install puts `tastytrade-mcp` (the server) and `tastytrade-mcp-doctor`
+on your `PATH`, so an MCP client config can use `"command": "tastytrade-mcp"`
+with no `args`, or `"command": "npx", "args": ["-y", "@tastytrade/mcp-server"]`
+without installing anything. Pin a version (`@tastytrade/mcp-server@2.0.0`) in
+a client config you want to stay put — this server moves real money, and an
+unpinned `npx` picks up a new release the next time the client starts.
+
+From source:
+
 ```bash
 git clone https://github.com/tastytrade/tastytrade-mcp.git
 cd tastytrade-mcp
@@ -50,8 +67,7 @@ npm ci
 npm run build
 ```
 
-Clone-and-build is the supported install: nothing here is published to npm and
-there is no published container image. The included `Dockerfile` builds one
+There is no published container image. The included `Dockerfile` builds one
 locally if you would rather run the server in a container — read its header
 first, because a stdio server has to be started with `docker run -i`, and
 without that the container exits immediately and looks exactly like a crash.

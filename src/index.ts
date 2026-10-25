@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * tastytrade MCP Server
  * Entry point for the Model Context Protocol server
