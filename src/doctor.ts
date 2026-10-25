@@ -621,6 +621,38 @@ export function classifyApiHost(host: string): HostClassification {
   }
 }
 
+/**
+ * Hosts tastytrade names in a token's `iss` claim that are NOT API base URLs
+ * this server calls, mapped to the environment they issue for.
+ *
+ * Production refresh tokens minted at my.tastytrade.com carry
+ * `iss: https://api.tastytrade.com` — the brand domain of the same production
+ * auth service — while the API is called at `api.tastyworks.com`
+ * (tastytrade/tastytrade-mcp#39). Without this table the issuer classified as
+ * "unknown" and every correctly configured production user was warned about the
+ * SANDBOX twin-domain trap, which has nothing to do with their setup.
+ *
+ * Deliberately separate from KNOWN_API_HOSTS: recognising an issuer says
+ * nothing about where credentials may be SENT, and this table must not widen
+ * that allowlist.
+ */
+const KNOWN_TOKEN_ISSUERS: Readonly<Record<string, "production" | "sandbox">> =
+  Object.freeze(
+    Object.assign(Object.create(null) as Record<string, never>, {
+      "api.tastytrade.com": "production",
+    }),
+  );
+
+/**
+ * The environment a known token issuer belongs to, or undefined when the host
+ * is not one of tastytrade's issuer aliases.
+ */
+export function issuerAliasEnvironment(
+  host: string,
+): "production" | "sandbox" | undefined {
+  return KNOWN_TOKEN_ISSUERS[normaliseHostname(host)];
+}
+
 export interface EndpointState {
   check: CheckResult;
   /** The resolved base URL, exactly as the server would use it. */
@@ -1366,7 +1398,13 @@ export function inspectRefreshTokenClaims(
     ) {
       details.push("`iss` host matches TASTYTRADE_API_URL.");
     } else {
-      const issClass = classifyApiHost(issHost);
+      const aliasEnv = issuerAliasEnvironment(issHost);
+      const issClass: HostClassification = aliasEnv
+        ? {
+            environment: aliasEnv,
+            label: `tastytrade ${aliasEnv} token issuer`,
+          }
+        : classifyApiHost(issHost);
       const apiClass =
         endpoint.classification ?? classifyApiHost(endpoint.target.host);
       // Both halves of this sentence are operator-supplied — one from
@@ -1380,7 +1418,14 @@ export function inspectRefreshTokenClaims(
           issClass.environment === "sandbox") &&
         (apiClass.environment === "production" ||
           apiClass.environment === "sandbox");
-      if (bothKnown && issClass.environment !== apiClass.environment) {
+      if (aliasEnv && issClass.environment === apiClass.environment) {
+        // A documented issuer alias for the environment being called: the
+        // token belongs here, and there is nothing for the operator to fix.
+        details.push(
+          `\`iss\` host ${shownIss} is tastytrade's ${aliasEnv} token issuer, ` +
+            `the same environment as TASTYTRADE_API_URL (${shownApi}).`,
+        );
+      } else if (bothKnown && issClass.environment !== apiClass.environment) {
         problems.push({
           status: "fail",
           message:

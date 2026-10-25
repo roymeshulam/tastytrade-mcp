@@ -45,6 +45,7 @@ import {
   USAGE,
   abbreviateHome,
   classifyApiHost,
+  issuerAliasEnvironment,
   classifyReadOnly,
   decodeJwt,
   defaultDeps,
@@ -1133,6 +1134,45 @@ describe("check 5: refresh-token claims", () => {
     const rendered = check.details.join("\n");
     expect(rendered).toContain("vendor-internal alias");
     expect(rendered).toContain("DIFFERENT domains");
+  });
+
+  it("passes a production token issued by api.tastytrade.com against api.tastyworks.com (#39)", () => {
+    // The real production shape: tastytrade issues refresh tokens under its
+    // brand domain while the API answers on tastyworks.com.
+    const check = claimsFor(
+      { iss: "https://api.tastytrade.com", aud: CLIENT_ID },
+      { TASTYTRADE_API_URL: PRODUCTION_API_URL },
+    );
+    expect(check.status).toBe("pass");
+    const rendered = check.details.join("\n");
+    expect(rendered).toContain("production token issuer");
+    expect(rendered).not.toContain("DIFFERENT domains");
+  });
+
+  it("recognises the issuer alias case-insensitively and with a trailing dot", () => {
+    const check = claimsFor(
+      { iss: "https://API.Tastytrade.com./", aud: CLIENT_ID },
+      { TASTYTRADE_API_URL: PRODUCTION_API_URL },
+    );
+    expect(check.status).toBe("pass");
+  });
+
+  it("fails a production-issued token against a sandbox endpoint", () => {
+    const check = claimsFor(
+      { iss: "https://api.tastytrade.com", aud: CLIENT_ID },
+      { TASTYTRADE_API_URL: SANDBOX_API_URL },
+    );
+    expect(check.status).toBe("fail");
+    expect(check.details.join("\n")).toContain(
+      "Sandbox credentials never work against production",
+    );
+  });
+
+  it("does not treat the issuer alias as an API host the server will call", () => {
+    expect(issuerAliasEnvironment("api.tastytrade.com")).toBe("production");
+    expect(issuerAliasEnvironment("api.tastyworks.com")).toBeUndefined();
+    expect(issuerAliasEnvironment("toString")).toBeUndefined();
+    expect(classifyApiHost("api.tastytrade.com").environment).toBe("unknown");
   });
 
   it("notes rather than fails when iss is not a URL", () => {
