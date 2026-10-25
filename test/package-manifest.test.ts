@@ -109,3 +109,29 @@ describe("server.json describes the npm package", () => {
     ]);
   });
 });
+
+describe("the PyPI launcher runs this exact npm release (#45)", () => {
+  const pyproject = read("python/pyproject.toml");
+  const init = read("python/src/tastytrade_mcp/__init__.py");
+
+  it("carries the package.json version in pyproject.toml and __version__", () => {
+    expect(/^version = "([^"]+)"$/m.exec(pyproject)?.[1]).toBe(PKG.version);
+    expect(/^__version__ = "([^"]+)"$/m.exec(init)?.[1]).toBe(PKG.version);
+  });
+
+  it("launches this package by name", () => {
+    expect(/^NPM_PACKAGE = "([^"]+)"$/m.exec(init)?.[1]).toBe(PKG.name);
+  });
+
+  it("exposes the same two commands as the npm bin", () => {
+    for (const name of Object.keys(PKG.bin)) {
+      expect(pyproject).toMatch(
+        new RegExp(`^${name} = "tastytrade_mcp\\.cli:`, "m"),
+      );
+    }
+  });
+
+  it("ships the same licence text", () => {
+    expect(read("python/LICENSE")).toBe(read("LICENSE"));
+  });
+});

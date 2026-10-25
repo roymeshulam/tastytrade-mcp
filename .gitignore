@@ -37,3 +37,11 @@ Thumbs.db
 
 # TypeScript incremental build cache
 *.tsbuildinfo
+
+# Python launcher (python/): virtualenv and build output
+/python/.venv
+/python/dist
+/python/build
+__pycache__/
+*.egg-info/
+.pytest_cache/

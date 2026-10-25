@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tastytrade-mcp"
+# Kept equal to package.json "version" (test/package-manifest.test.ts pins it):
+# this launcher runs exactly that npm release.
+version = "2.0.0"
+description = "Launcher for the tastytrade MCP server (@tastytrade/mcp-server on npm). Requires Node.js 22+."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+authors = [{ name = "tastytrade" }]
+keywords = ["mcp", "mcp-server", "model-context-protocol", "tastytrade", "trading"]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Topic :: Office/Business :: Financial :: Investment",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/tastytrade/tastytrade-mcp"
+Documentation = "https://github.com/tastytrade/tastytrade-mcp/blob/main/README.md"
+Issues = "https://github.com/tastytrade/tastytrade-mcp/issues"
+Repository = "https://github.com/tastytrade/tastytrade-mcp"
+
+[project.scripts]
+tastytrade-mcp = "tastytrade_mcp.cli:main"
+tastytrade-mcp-doctor = "tastytrade_mcp.cli:doctor"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tastytrade_mcp"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/tastytrade_mcp", "tests", "README.md", "pyproject.toml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -67,6 +67,11 @@ npm ci
 npm run build
 ```
 
+A Python launcher is published as `tastytrade-mcp` on PyPI (`pipx install
+tastytrade-mcp`, or `uvx tastytrade-mcp`). It is not a separate implementation:
+it runs this npm package at the same version through `npx`, so it needs Node.js
+22+ on the `PATH` all the same. See [python/README.md](python/README.md).
+
 There is no published container image. The included `Dockerfile` builds one
 locally if you would rather run the server in a container — read its header
 first, because a stdio server has to be started with `docker run -i`, and
