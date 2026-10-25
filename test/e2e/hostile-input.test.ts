@@ -477,26 +477,34 @@ describe("prototype pollution through the translation seam", () => {
   });
 
   /**
-   * A `constructor` key is a special case worth pinning, because it never
-   * reaches this server's code at all: the MCP SDK validates `params.arguments`
-   * with a zod record schema whose plain-object test reads `value.constructor`,
-   * so an own `constructor` key makes the whole `tools/call` fail validation.
-   *
-   * The consequence to be aware of is the error SHAPE, not a security gap: the
-   * caller gets a JSON-RPC error rather than a `validation` envelope, because
-   * the request never becomes a tool call. No bucket is charged and no request
-   * is made, so it is refused strictly more cheaply than a dispatched call.
+   * A top-level `constructor` key used to be refused by the MCP SDK itself: on
+   * zod 3 its record schema's plain-object test read `value.constructor`, so the
+   * whole `tools/call` failed validation before reaching this server. zod 4
+   * (required to clear GHSA-mrhx-c7xc-m3w5) no longer does that, so the key now
+   * reaches the dispatcher — and the server's own whitelist builders are what
+   * keep it inert, exactly as they already did for a nested `constructor`.
+   * This pins the server's behaviour, not a dependency's implementation detail.
    */
-  it("is refused by the SDK's own schema validation when `constructor` is a top-level key", async () => {
+  it("drops a top-level `constructor` key: it reaches the dispatcher and is never copied", async () => {
     const res = await attempt(
       "tastytrade_dry_run_order",
-      hostile(
-        `{"account_number":"${ACCT}","order_type":"Limit","time_in_force":"Day","constructor":{"x":1},"legs":[]}`,
-      ),
+      hostile(`{
+        "account_number": "${ACCT}",
+        "order_type": "Limit", "time_in_force": "Day", "price": 1, "price_effect": "Debit",
+        "constructor": { "x": 1 }, "prototype": { "y": 2 },
+        "legs": [{
+          "instrument_type": "Equity", "symbol": "AAPL",
+          "action": "Buy to Open", "quantity": 1
+        }]
+      }`),
     );
-    expect(res.protocolRejected).toBe(true);
-    expect(h.requests).toHaveLength(0);
-    // Still callable afterwards: the rejection is per-request, not fatal.
+    expect(res.protocolRejected).toBe(false);
+    expect(res.isError).toBe(false);
+    const body = h.lastRequest()!.body as Record<string, unknown>;
+    expect(Object.hasOwn(body, "constructor")).toBe(false);
+    expect(Object.hasOwn(body, "prototype")).toBe(false);
+    expect(JSON.stringify(body)).not.toContain('"x"');
+    // Still callable afterwards.
     expect((await attempt("tastytrade_get_accounts", {})).isError).toBe(false);
     expectNoPrototypePollution();
   });
